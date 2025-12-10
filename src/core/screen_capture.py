@@ -15,9 +15,9 @@ import ctypes
 from datetime import datetime
 import threading
 
-from ..config.settings import settings
-from ..utils.logger import get_logger
-from ..config.constants import PERFORMANCE_THRESHOLDS
+from config.settings import settings
+from utils.logger import get_logger
+from config.constants import PERFORMANCE_THRESHOLDS
 
 
 class ScreenCapture:
@@ -41,7 +41,7 @@ class ScreenCapture:
         self.enable_dpi_aware = enable_dpi_aware
 
         # Initialize capture components
-        self.mss_instance = mss.mss()
+        self.mss_instance = None  # Will be created per capture to avoid threading issues
         self.monitors = self._get_monitors()
         self.primary_monitor = self._get_primary_monitor()
 
@@ -60,7 +60,7 @@ class ScreenCapture:
 
         self.logger.info(
             f"ScreenCapture initialized: {len(self.monitors)} monitors, "
-            f"primary: {self.primary_monitor.width}x{self.primary_monitor.height}"
+            f"primary: {self.primary_monitor['width']}x{self.primary_monitor['height']}"
         )
 
     def _setup_dpi_awareness(self):
@@ -86,15 +86,16 @@ class ScreenCapture:
     def _get_monitors(self) -> List[Dict[str, Any]]:
         """Get information about all monitors."""
         monitors = []
-        for i, monitor in enumerate(self.mss_instance.monitors[1:], 1):  # Skip first (combined)
-            monitors.append({
-                'id': i,
-                'left': monitor['left'],
-                'top': monitor['top'],
-                'width': monitor['width'],
-                'height': monitor['height'],
-                'dpi_scale': self._get_dpi_scale(monitor)
-            })
+        with mss.mss() as mss_instance:
+            for i, monitor in enumerate(mss_instance.monitors[1:], 1):  # Skip first (combined)
+                monitors.append({
+                    'id': i,
+                    'left': monitor['left'],
+                    'top': monitor['top'],
+                    'width': monitor['width'],
+                    'height': monitor['height'],
+                    'dpi_scale': self._get_dpi_scale(monitor)
+                })
         return monitors
 
     def _get_primary_monitor(self) -> Dict[str, Any]:
@@ -165,11 +166,16 @@ class ScreenCapture:
                     }
                 else:
                     # Capture all monitors
-                    capture_bbox = self.mss_instance.monitors[0]  # Combined monitors
+                    with mss.mss() as mss_instance:
+                        capture_bbox = mss_instance.monitors[0]  # Combined monitors
+                        screenshot = mss_instance.grab(capture_bbox)
+                        img = Image.frombytes('RGB', screenshot.size, screenshot.rgb)
 
-                # Capture screen
-                screenshot = self.mss_instance.grab(capture_bbox)
-                img = Image.frombytes('RGB', screenshot.size, screenshot.rgb)
+                # Actually capture the screen for region or monitor
+                if region or monitor_id is not None:
+                    with mss.mss() as mss_instance:
+                        screenshot = mss_instance.grab(capture_bbox)
+                        img = Image.frombytes('RGB', screenshot.size, screenshot.rgb)
 
                 # Apply DPI scaling if needed
                 if self.enable_dpi_aware:
@@ -227,7 +233,7 @@ class ScreenCapture:
 
     def cleanup_old_images(self, max_age_seconds: Optional[int] = None):
         """Remove old screenshots based on age or count."""
-        max_age = max_age_seconds or settings.image.max_screenshot_age
+        max_age = max_age_seconds or settings.config.image.max_screenshot_age
         current_time = time.time()
 
         try:
@@ -368,5 +374,7 @@ class ScreenCapture:
 
     def __del__(self):
         """Cleanup resources."""
-        if hasattr(self, 'mss_instance'):
-            self.mss_instance.close()
+        try:
+            self.stop_continuous_capture()
+        except:
+            pass

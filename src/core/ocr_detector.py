@@ -12,9 +12,9 @@ import easyocr
 import re
 from dataclasses import dataclass
 
-from ..config.settings import settings
-from ..utils.logger import get_logger
-from ..config.constants import OCR_TRIGGER_PHRASES
+from config.settings import settings
+from utils.logger import get_logger
+from config.constants import OCR_TRIGGER_PHRASES
 
 
 @dataclass
@@ -41,8 +41,8 @@ class OCRDetector:
 
         # Configuration
         self.languages = languages or ['en', 'ch_sim']
-        self.confidence_threshold = confidence_threshold or settings.detection.ocr_confidence_threshold
-        self.gpu_enabled = gpu_enabled and settings.detection.enable_gpu
+        self.confidence_threshold = confidence_threshold or settings.config.detection.ocr_confidence_threshold
+        self.gpu_enabled = gpu_enabled and settings.config.detection.enable_gpu
         self.text_detector = text_detector
 
         # Compile trigger phrase patterns
@@ -210,6 +210,15 @@ class OCRDetector:
     def _preprocess_image(self, img_array: np.ndarray) -> np.ndarray:
         """Preprocess image for better OCR accuracy."""
         try:
+            # For EasyOCR, minimal preprocessing works better
+            if self.text_detector == 'easyocr':
+                # Just ensure RGB format, no heavy preprocessing
+                if len(img_array.shape) == 2:
+                    # Convert grayscale to RGB
+                    return cv2.cvtColor(img_array, cv2.COLOR_GRAY2RGB)
+                return img_array
+
+            # For Tesseract, do more aggressive preprocessing
             # Convert to grayscale if needed
             if len(img_array.shape) == 3:
                 img_gray = cv2.cvtColor(img_array, cv2.COLOR_RGB2GRAY)
@@ -250,7 +259,7 @@ class OCRDetector:
     def _easyocr_detect(self, img_array: np.ndarray) -> List[Dict[str, Any]]:
         """Perform OCR using EasyOCR."""
         try:
-            # EasyOCR expects RGB images
+            # EasyOCR expects RGB images (preprocessing already handles this)
             if len(img_array.shape) == 2:
                 img_array = cv2.cvtColor(img_array, cv2.COLOR_GRAY2RGB)
 

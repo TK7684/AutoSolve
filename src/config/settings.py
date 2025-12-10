@@ -28,7 +28,7 @@ class TelegramConfig:
 class DetectionConfig:
     """Detection settings configuration."""
     check_interval: int = 10  # seconds
-    ocr_confidence_threshold: float = 0.7
+    ocr_confidence_threshold: float = 0.5
     yolo_confidence_threshold: float = 0.5
     yolo_iou_threshold: float = 0.45
     enable_gpu: bool = True
@@ -97,7 +97,7 @@ class SettingsManager:
 
         detection = DetectionConfig(
             check_interval=int(os.getenv("CHECK_INTERVAL", "10")),
-            ocr_confidence_threshold=float(os.getenv("OCR_CONFIDENCE_THRESHOLD", "0.7")),
+            ocr_confidence_threshold=float(os.getenv("OCR_CONFIDENCE_THRESHOLD", "0.5")),
             yolo_confidence_threshold=float(os.getenv("YOLO_CONFIDENCE_THRESHOLD", "0.5")),
             yolo_iou_threshold=float(os.getenv("YOLO_IOU_THRESHOLD", "0.45")),
             enable_gpu=os.getenv("ENABLE_GPU", "true").lower() == "true",
