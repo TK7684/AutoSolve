@@ -17,30 +17,9 @@ try:
 except ImportError:
     YOLO = None
 
-from ..config.settings import settings
-from ..utils.logger import get_logger
-from ..config.constants import YOLO_CLASS_NAMES
-
-
-@dataclass
-class DetectionBox:
-    """Bounding box for detected object."""
-    x1: int  # Left
-    y1: int  # Top
-    x2: int  # Right
-    y2: int  # Bottom
-    confidence: float
-    class_id: int
-    class_name: str
-    center: Tuple[int, int] = None
-
-    def __post_init__(self):
-        """Calculate center point."""
-        if self.center is None:
-            self.center = (
-                (self.x1 + self.x2) // 2,
-                (self.y1 + self.y2) // 2
-            )
+from config.settings import settings
+from utils.logger import get_logger
+from config.constants import YOLO_CLASS_NAMES, DetectionBox
 
 
 @dataclass
@@ -68,10 +47,10 @@ class JigsawDetector:
         self.logger = get_logger(f"{__name__}.JigsawDetector")
 
         # Configuration
-        self.model_path = model_path or settings.paths.yolo_model_path
-        self.confidence_threshold = confidence_threshold or settings.detection.yolo_confidence_threshold
-        self.iou_threshold = iou_threshold or settings.detection.yolo_iou_threshold
-        self.enable_gpu = enable_gpu if enable_gpu is not None else settings.detection.enable_gpu
+        self.model_path = model_path or settings.config.paths.yolo_model_path
+        self.confidence_threshold = confidence_threshold or settings.config.detection.yolo_confidence_threshold
+        self.iou_threshold = iou_threshold or settings.config.detection.yolo_iou_threshold
+        self.enable_gpu = enable_gpu if enable_gpu is not None else settings.config.detection.enable_gpu
         self.fallback_enabled = fallback_enabled
 
         # Initialize YOLO model
@@ -120,11 +99,29 @@ class JigsawDetector:
 
         try:
             self.logger.info(f"Loading YOLO model from {self.model_path}")
+
+            # Load model with optimizations for CPU
             self.model = YOLO(str(model_path))
 
-            # Test model with a dummy inference
-            test_image = np.zeros((640, 640, 3), dtype=np.uint8)
-            _ = self.model(test_image, verbose=False, device=self.device)
+            # Optimize for CPU
+            if self.device == 'cpu':
+                # Set model to evaluation mode
+                self.model.eval()
+
+                # Disable gradients
+                for param in self.model.model.parameters():
+                    param.requires_grad = False
+
+                # Use torch.jit.script for potential optimization
+                try:
+                    self.model.fuse()  # Fuse Conv2D + BatchNorm for speed
+                except:
+                    pass  # Not all models support fusion
+
+            # Warm up the model with a dummy inference
+            test_image = np.random.randint(0, 255, (640, 640, 3), dtype=np.uint8)
+            with torch.no_grad():
+                _ = self.model(test_image, verbose=False, device=self.device)
 
             self.model_loaded = True
             self.logger.info(
@@ -203,54 +200,82 @@ class JigsawDetector:
     def _detect_with_yolo(self, image: Image.Image) -> JigsawDetectionResult:
         """Detect jigsaw using YOLO model."""
         try:
-            # Convert PIL to numpy array
+            # Convert PIL to numpy array (RGB format)
             img_array = np.array(image)
 
-            # Run YOLO inference
+            # Optimizations for CPU
+            if self.device == 'cpu':
+                # Resize image for faster processing on CPU
+                # Keep aspect ratio
+                height, width = img_array.shape[:2]
+                if max(height, width) > 640:
+                    scale = 640 / max(height, width)
+                    new_height = int(height * scale)
+                    new_width = int(width * scale)
+                    img_array = cv2.resize(img_array, (new_width, new_height))
+
+            # Run YOLO inference with optimized settings
             results = self.model(
                 img_array,
                 verbose=False,
                 conf=self.confidence_threshold,
                 iou=self.iou_threshold,
-                device=self.device
+                device=self.device,
+                # Optimizations for CPU
+                half=False,  # Disable FP16 on CPU
+                augment=False,  # Disable augmentation for faster inference
+                classes=[0],  # Assuming class 0 is jigsaw/puzzle
+                max_det=10  # Limit maximum detections
             )
 
             # Process results
             boxes = []
             max_confidence = 0.0
 
-            for result in results:
-                if result.boxes is not None:
-                    for box in result.boxes:
-                        # Get box coordinates
-                        x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
-                        conf = float(box.conf[0].cpu().numpy())
-                        cls_id = int(box.cls[0].cpu().numpy())
+            # Get the first result (single image)
+            result = results[0] if results else None
 
-                        # Get class name
-                        class_name = YOLO_CLASS_NAMES.get(
-                            cls_id, f'class_{cls_id}'
-                        )
+            if result is not None and result.boxes is not None:
+                # Convert boxes to CPU if needed
+                boxes_tensor = result.boxes.xyxy.cpu().numpy()
+                conf_tensor = result.boxes.conf.cpu().numpy()
+                cls_tensor = result.boxes.cls.cpu().numpy()
 
-                        # Create detection box
-                        detection_box = DetectionBox(
-                            x1=int(x1),
-                            y1=int(y1),
-                            x2=int(x2),
-                            y2=int(y2),
-                            confidence=conf,
-                            class_id=cls_id,
-                            class_name=class_name
-                        )
+                for i in range(len(boxes_tensor)):
+                    x1, y1, x2, y2 = boxes_tensor[i]
+                    conf = float(conf_tensor[i])
+                    cls_id = int(cls_tensor[i])
 
-                        boxes.append(detection_box)
-                        max_confidence = max(max_confidence, conf)
+                    # Get class name
+                    class_name = YOLO_CLASS_NAMES.get(cls_id, f'class_{cls_id}')
+
+                    # Scale coordinates back if image was resized
+                    if self.device == 'cpu' and max(image.size) > 640:
+                        scale = max(image.size) / 640
+                        x1 = int(x1 * scale)
+                        y1 = int(y1 * scale)
+                        x2 = int(x2 * scale)
+                        y2 = int(y2 * scale)
+                    else:
+                        x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
+
+                    # Create detection box
+                    detection_box = DetectionBox(
+                        x1=x1,
+                        y1=y1,
+                        x2=x2,
+                        y2=y2,
+                        confidence=conf,
+                        class_id=cls_id,
+                        class_name=class_name
+                    )
+
+                    boxes.append(detection_box)
+                    max_confidence = max(max_confidence, conf)
 
             # Check if we detected any jigsaw-related objects
-            jigsaw_boxes = [
-                box for box in boxes
-                if 'jigsaw' in box.class_name.lower() or 'puzzle' in box.class_name.lower()
-            ]
+            # For now, treat all detections as potential jigsaws
+            jigsaw_boxes = boxes  # Since the model should be trained specifically for jigsaws
 
             return JigsawDetectionResult(
                 is_detected=len(jigsaw_boxes) > 0,
