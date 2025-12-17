@@ -148,34 +148,33 @@ class ScreenCapture:
 
         with self.capture_lock:
             try:
-                # Determine capture area
-                if region:
-                    capture_bbox = {
-                        'left': region[0],
-                        'top': region[1],
-                        'width': region[2],
-                        'height': region[3]
-                    }
-                elif monitor_id is not None:
-                    monitor = self.monitors[monitor_id - 1] if monitor_id <= len(self.monitors) else self.primary_monitor
-                    capture_bbox = {
-                        'left': monitor['left'],
-                        'top': monitor['top'],
-                        'width': monitor['width'],
-                        'height': monitor['height']
-                    }
-                else:
-                    # Capture all monitors
-                    with mss.mss() as mss_instance:
+                # Always create an mss instance for capture
+                with mss.mss() as mss_instance:
+                    # Determine capture area and perform capture
+                    if region:
+                        capture_bbox = {
+                            'left': region[0],
+                            'top': region[1],
+                            'width': region[2],
+                            'height': region[3]
+                        }
+                        screenshot = mss_instance.grab(capture_bbox)
+                    elif monitor_id is not None:
+                        monitor = self.monitors[monitor_id - 1] if monitor_id <= len(self.monitors) else self.primary_monitor
+                        capture_bbox = {
+                            'left': monitor['left'],
+                            'top': monitor['top'],
+                            'width': monitor['width'],
+                            'height': monitor['height']
+                        }
+                        screenshot = mss_instance.grab(capture_bbox)
+                    else:
+                        # Capture all monitors
                         capture_bbox = mss_instance.monitors[0]  # Combined monitors
                         screenshot = mss_instance.grab(capture_bbox)
-                        img = Image.frombytes('RGB', screenshot.size, screenshot.rgb)
 
-                # Actually capture the screen for region or monitor
-                if region or monitor_id is not None:
-                    with mss.mss() as mss_instance:
-                        screenshot = mss_instance.grab(capture_bbox)
-                        img = Image.frombytes('RGB', screenshot.size, screenshot.rgb)
+                    # Convert to PIL Image
+                    img = Image.frombytes('RGB', screenshot.size, screenshot.rgb)
 
                 # Apply DPI scaling if needed
                 if self.enable_dpi_aware:
