@@ -209,4 +209,4 @@ credentials.json
 
 # Test outputs
 test_outputs/
-test_screenshots/
+test_screenshots/.claude/settings.local.json
